@@ -1,0 +1,224 @@
+diff --git a/runtime/backend/sdl/backend.c b/runtime/backend/sdl/backend.c
+index ea9cbb6..3fc5787 100644
+--- a/runtime/backend/sdl/backend.c
++++ b/runtime/backend/sdl/backend.c
+@@ -23,7 +23,11 @@
+ #include "mapper.h"
+ #include <SDL2/SDL.h>
+ #include <errno.h>
++#include <stdlib.h>
+ #include <stdio.h>
++#include <fcntl.h>
++#include <unistd.h>
++#include <linux/input.h>
+ #include <time.h>
+ #include <string.h>
+ #include "core/keymap.h"
+@@ -38,6 +42,12 @@
+ 
+ #define RESIZABLE_DELAY 30
+ 
++// A30: portrait panel, landscape game. QUIX_ROT=90/270 rotates the presented
++// quad; the window is opened with swapped dimensions.
++static int a30_rot = 0;
++static int a30KeyFd = -1;
++static long a30MenuDownAt = 0;
++
+ // Un texto ya dibujado en una textura (se rehace solo si cambia)
+ typedef struct {
+   GLuint tex;
+@@ -143,7 +153,12 @@ static void sdl_open_gamepads(SDLPlatformData* data) {
+     }
+     if (slot >= 0) {
+       data->pads[slot] = SDL_GameControllerOpen(i);
+-      if (data->pads[slot]) printf("Gamepad %d: %s\n", slot, SDL_GameControllerName(data->pads[slot]));
++      if (data->pads[slot]) {
++        printf("Gamepad %d: %s\n", slot, SDL_GameControllerName(data->pads[slot]));
++        char *map = SDL_GameControllerMapping(data->pads[slot]);
++        printf("[A30_MAP] %s\n", map ? map : "(null)");
++        if (map) SDL_free(map);
++      }
+     }
+   }
+ }
+@@ -183,12 +198,20 @@ static int sdl_gl_setup(SDLPlatformData* data) {
+ // Dibuja una textura en el rectangulo (x, y, w, h) en pixeles de la ventana
+ // (origen arriba a la izquierda). flip: la textura viene de un framebuffer
+ // (origen abajo).
+-static void sdl_blit(SDLPlatformData* data, GLuint tex, int x, int y, int w, int h, int ww, int wh, int flip) {
++static void sdl_blit(SDLPlatformData* data, GLuint tex, int x, int y, int w, int h, int ww, int wh, int flip, int rot) {
+   float x0 = (float)x / ww * 2 - 1, x1 = (float)(x + w) / ww * 2 - 1;
+   float y0 = 1 - (float)y / wh * 2, y1 = 1 - (float)(y + h) / wh * 2;
+   float v0 = flip ? 1.0f : 0.0f, v1 = flip ? 0.0f : 1.0f;
+   const GLfloat pos[8] = { x0, y0, x1, y0, x0, y1, x1, y1 };
+-  const GLfloat uv[8] = { 0, v0, 1, v0, 0, v1, 1, v1 };
++  // A30: rotate the source UVs; the destination rect is already the full
++  // portrait window (draw_layers fits the swapped canvas into it).
++  // GL_TRIANGLE_STRIP corners: TL, TR, BL, BR. v0/v1 already account for
++  // the framebuffer's bottom origin (flip).
++  const GLfloat uv90[8]  = { 0, v1, 0, v0, 1, v1, 1, v0 };
++  const GLfloat uv270[8] = { 1, v0, 1, v1, 0, v0, 0, v1 };
++  const GLfloat uv180[8] = { 1, v1, 0, v1, 1, v0, 0, v0 };
++  const GLfloat uv[8]    = { 0, v0, 1, v0, 0, v1, 1, v1 };
++  const GLfloat *u = rot == 270 ? uv270 : rot == 180 ? uv180 : rot == 90 ? uv90 : uv;
+   qgl.UseProgram(data->program);
+   qgl.ActiveTexture(GL_TEXTURE0);
+   qgl.BindTexture(GL_TEXTURE_2D, tex);
+@@ -198,7 +221,7 @@ static void sdl_blit(SDLPlatformData* data, GLuint tex, int x, int y, int w, int
+   qgl.EnableVertexAttribArray(0);
+   qgl.EnableVertexAttribArray(1);
+   qgl.VertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 0, pos);
+-  qgl.VertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, 0, uv);
++  qgl.VertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, 0, u);
+   qgl.DrawArrays(GL_TRIANGLE_STRIP, 0, 4);
+ }
+ 
+@@ -220,6 +243,16 @@ static void sdl_init(Backend* backend, int width, int height) {
+   }
+ 
+   printf("Video driver: %s\n", SDL_GetCurrentVideoDriver());
++  {
++    const char *r = getenv("QUIX_ROT");
++    a30_rot = r && (!strcmp(r, "90") || !strcmp(r, "180") || !strcmp(r, "270")) ? atoi(r) : 0;
++    if (a30_rot) printf("A30 rotation: %d\n", a30_rot);
++    if (getenv("QUIX_A30_KEYS")) {
++      a30KeyFd = open("/dev/input/event3", O_RDONLY | O_NONBLOCK);
++      if (a30KeyFd < 0) fprintf(stderr, "[A30] event3: %s\n", strerror(errno));
++      else printf("[A30] reading /dev/input/event3\n");
++    }
++  }
+   // las asignaciones del mando hechas en el launcher (Controls)
+   mapper_load(backend->controller_map);
+ 
+@@ -233,12 +266,14 @@ static void sdl_init(Backend* backend, int width, int height) {
+   int scale = 1;
+   while ((width * scale < 240 || height * scale < 240) && scale < 16) scale++;
+ 
++  int win_w = (a30_rot == 90 || a30_rot == 270) ? height : width;
++  int win_h = (a30_rot == 90 || a30_rot == 270) ? width : height;
+   data->window = SDL_CreateWindow(
+       backend->title[0] ? backend->title : "quixjs",
+       SDL_WINDOWPOS_CENTERED,
+       SDL_WINDOWPOS_CENTERED,
+-      width * scale,
+-      height * scale,
++      win_w * scale,
++      win_h * scale,
+       // se crea con tamano fijo: los gestores de ventanas tiling (sway...)
+       // la dejan flotando; despues se hace redimensionable (como tamatama)
+       SDL_WINDOW_OPENGL | SDL_WINDOW_SHOWN |
+@@ -361,8 +396,49 @@ static double sdl_refresh_rate(Backend* backend) {
+   return mode.refresh_rate;
+ }
+ 
++// A30: physical buttons are keyboard events on /dev/input/event3
++// (gpio-keys-polled); the virtual SDL pad does not carry them. Feed them as
++// quixjs key events, the same route the working Undertale port uses.
++static void a30_read_keys(Backend* backend) {
++  if (a30KeyFd < 0) return;
++  struct input_event ev;
++  while (read(a30KeyFd, &ev, sizeof ev) == (ssize_t)sizeof ev) {
++    if (ev.type != EV_KEY) continue;
++    const char *code = NULL;
++    switch (ev.code) {
++      case 103: code = "ArrowUp";    break;
++      case 108: code = "ArrowDown";  break;
++      case 105: code = "ArrowLeft";  break;
++      case 106: code = "ArrowRight"; break;
++      case 57:  code = "KeyZ";       break;  // A -> confirm
++      case 29:  code = "KeyX";       break;  // B -> cancel
++      case 42:  code = "KeyX";       break;  // X -> cancel
++      case 56:  code = "KeyC";       break;  // Y -> menu
++      case 28:  code = "Enter";      break;  // Start
++      case 97:  code = "Escape";     break;  // Select
++      default: break;
++    }
++    if (code) {
++      InputEvent in;
++      if (keymap_make_event(&in, ev.value ? INPUT_KEY_DOWN : INPUT_KEY_UP, code, 0, 0) == 0)
++        backend_push_input(backend, &in);
++    }
++    if (ev.code == 1) {  // physical Menu/Esc: long press quits
++      if (ev.value) a30MenuDownAt = SDL_GetTicks();
++      else {
++        if (a30MenuDownAt && SDL_GetTicks() - a30MenuDownAt >= 1000) {
++          SDLPlatformData* d = (SDLPlatformData*)backend->platform_data;
++          d->should_close = 1;
++        }
++        a30MenuDownAt = 0;
++      }
++    }
++  }
++}
++
+ static void sdl_process_events(Backend* backend) {
+   SDLPlatformData* data = (SDLPlatformData*)backend->platform_data;
++  a30_read_keys(backend);
+   SDL_Event event;
+   while (SDL_PollEvent(&event)) {
+     mapper_event(&event);   // solo hace algo mientras se asigna el mando
+@@ -525,7 +601,7 @@ static void sdl_draw_toast(Backend* backend, SDLPlatformData* data, int ww, int
+   int y = margin + (backend->overlay[0] ? data->overlay.h + 4 : 0);
+   int x = ww - margin - w + (int)((1.0f - in) * (w + margin));
+   data->blit_alpha = alpha;
+-  sdl_blit(data, data->toast.tex, x, y, w, h, ww, wh, 0);
++  sdl_blit(data, data->toast.tex, x, y, w, h, ww, wh, 0, 0);
+   data->blit_alpha = 1.0f;
+ }
+ 
+@@ -555,11 +631,11 @@ static void sdl_draw_overlay(Backend* backend, SDLPlatformData* data, int ww, in
+   qgl.Enable(GL_BLEND);
+   qgl.BlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+   qgl.Viewport(0, 0, ww, wh);
+-  if (fps) sdl_blit(data, data->overlay.tex, ww - data->overlay.w - 4, 4, data->overlay.w, data->overlay.h, ww, wh, 0);
++  if (fps) sdl_blit(data, data->overlay.tex, ww - data->overlay.w - 4, 4, data->overlay.w, data->overlay.h, ww, wh, 0, 0);
+   if (loading) {
+     int m = wh / 40;
+     sdl_blit(data, data->loading.tex, ww - data->loading.w - m, wh - data->loading.h - m, data->loading.w,
+-             data->loading.h, ww, wh, 0);
++             data->loading.h, ww, wh, 0, 0);
+   }
+   sdl_draw_toast(backend, data, ww, wh);
+   qgl.Disable(GL_BLEND);
+@@ -590,8 +666,17 @@ static void draw_layers(Backend* backend, SDLPlatformData* data, const PresentLa
+   for (int k = 0; k < 8; k++) data->layer_tex[k].used = 0;
+   if (n > 0 && layers[0].w > 0 && layers[0].h > 0) {
+     int w = layers[0].w, h = layers[0].h;
+-    double scale = (double)ww / w < (double)wh / h ? (double)ww / w : (double)wh / h;
+-    int dw = (int)(w * scale + 0.5), dh = (int)(h * scale + 0.5);
++    // With QUIX_ROT the window is swapped (portrait); fit the landscape
++    // canvas into it using the swapped source dimensions.
++    int dw, dh;
++    if (a30_rot) {
++      // A30 panel is 640x480; stretch the 816x624 canvas to fill it instead
++      // of leaving ~6 px black bars on each side.
++      dw = ww; dh = wh;
++    } else {
++      double scale = (double)ww / w < (double)wh / h ? (double)ww / w : (double)wh / h;
++      dw = (int)(w * scale + 0.5); dh = (int)(h * scale + 0.5);
++    }
+     int dx = (ww - dw) / 2, dy = (wh - dh) / 2;
+     qgl.Enable(GL_BLEND);
+     for (int i = 0; i < n; i++) {
+@@ -627,7 +712,7 @@ static void draw_layers(Backend* backend, SDLPlatformData* data, const PresentLa
+       }
+       if (l->premultiplied) qgl.BlendFunc(GL_ONE, GL_ONE_MINUS_SRC_ALPHA);
+       else qgl.BlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+-      sdl_blit(data, tex, dx, dy, dw, dh, ww, wh, flip);
++      sdl_blit(data, tex, dx, dy, dw, dh, ww, wh, flip, a30_rot);
+     }
+     qgl.Disable(GL_BLEND);
+   }
+diff --git a/runtime/thirdparty/webkit/JavaScriptCore/runtime/MathCommon.cpp b/runtime/thirdparty/webkit/JavaScriptCore/runtime/MathCommon.cpp
+index 24429b7..03ed321 100644
+--- a/runtime/thirdparty/webkit/JavaScriptCore/runtime/MathCommon.cpp
++++ b/runtime/thirdparty/webkit/JavaScriptCore/runtime/MathCommon.cpp
+@@ -604,7 +604,7 @@ JSC_DEFINE_NOEXCEPT_JIT_OPERATION(f64_nearest, double, (double operand))
+     return std::nearbyint(operand);
+ }
+ 
+-#if (OS(LINUX) && !defined(__GLIBC__)) || OS(HAIKU)
++#if (OS(LINUX) && (!defined(__GLIBC__) || !__GLIBC_PREREQ(2, 24))) || OS(HAIKU)
+ static inline float roundevenf(float operand)
+ {
+     float rounded = roundf(operand);
