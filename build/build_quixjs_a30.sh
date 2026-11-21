@@ -23,7 +23,8 @@ cd "$SRC"
 # glibc 2.23 roundeven fallback needed by JavaScriptCore.
 # Apply both the device support patch and the optional old-kernel memory
 # availability fallback. Applying twice is harmless; other conflicts fail.
-for PATCH in "$BASE/patches/quixjs-a30.patch" "$BASE/patches/quixjs-a30-memavailable.patch"; do
+for PATCH in "$BASE/patches/quixjs-a30.patch" "$BASE/patches/quixjs-a30-memavailable.patch" \
+             "$BASE/patches/quixjs-a30-neon.patch"; do
   if git apply --check "$PATCH" 2>/dev/null; then
     git apply "$PATCH"
   elif git apply --reverse --check "$PATCH" 2>/dev/null; then
@@ -60,7 +61,14 @@ JOBS=${JOBS:-8} tools/build-jsc.sh armhf libcxx icu jsc install
 
 SYSROOT="$SRC/obj/deps/sysroot-armhf"
 JSC="$SRC/obj/deps/jsc-armhf"
-CC="clang --target=$TARGET -march=armv7-a -mfpu=vfpv3-d16 -mfloat-abi=hard --sysroot=$SYSROOT"
+# The A33/Cortex-A7 supports NEON/VFPv4. Keep the old scalar build as
+# an A/B fallback: A30_USE_NEON=0 disables NEON and uses the old VFP profile.
+if [ "${A30_USE_NEON:-1}" = 1 ]; then
+  CPU_FLAGS="-mcpu=cortex-a7 -mfpu=neon-vfpv4"
+else
+  CPU_FLAGS="-march=armv7-a -mfpu=vfpv3-d16"
+fi
+CC="clang --target=$TARGET $CPU_FLAGS -mfloat-abi=hard --sysroot=$SYSROOT"
 LIBS="-L$JSC/lib -lJavaScriptCore -lWTF -lbmalloc -l:libatomic.a \
  -licui18n -licuuc -licudata -l:libc++.a -l:libc++abi.a \
  -lSDL2_ttf -lSDL2_image -lSDL2 -lm -lpthread -ldl -static-libgcc \
@@ -70,7 +78,7 @@ make -j"$JOBS" \
   CC="$CC" \
   JSC_BUILD="$JSC" \
   JSC_LIBS= \
-  CFLAGS="-O2 -D_GNU_SOURCE -DQUIX_HANDHELD -Iruntime -Iruntime/thirdparty \
+  CFLAGS="-O2 $CPU_FLAGS -D_GNU_SOURCE -DQUIX_HANDHELD -Iruntime -Iruntime/thirdparty \
     -Iruntime/thirdparty/tomlc17 -Iobj/gen -I$JSC/include \
     -I$SYSROOT/usr/include/SDL2" \
   LDFLAGS="$LIBS" \
