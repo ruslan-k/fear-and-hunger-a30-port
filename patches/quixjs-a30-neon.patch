@@ -1,0 +1,16 @@
+diff --git a/runtime/binding/webgl.c b/runtime/binding/webgl.c
+--- a/runtime/binding/webgl.c
++++ b/runtime/binding/webgl.c
+@@ -1103,10 +1103,10 @@
+     memcpy(d + x * 4, &o, 4);
+   }
+ }
+ 
+-#if defined(__aarch64__)
+-#include <arm_neon.h>
++#if defined(__aarch64__) || defined(__ARM_NEON)
++#include <arm_neon.h>
+ // (c * a + 128 + ((c * a + 128) >> 8)) >> 8: con a = 255 da c, con a = 0 da 0
+ static inline uint8x8_t mul255(uint8x8_t c, uint8x8_t a) {
+   uint16x8_t t = vaddq_u16(vmull_u8(c, a), vdupq_n_u16(128));
+   return vshrn_n_u16(vaddq_u16(t, vshrq_n_u16(t, 8)), 8);
