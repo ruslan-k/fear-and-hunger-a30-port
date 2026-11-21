@@ -79,3 +79,28 @@ guard targets memory-pressure stalls, not unconditional FPS uplift. Compare
 the same scene for at least three minutes: FPS and slow frames in `log.txt`,
 VmRSS/VmSwap in `/proc/<pid>/status`, and `pswpout` in `/proc/vmstat`.
 If full GC occurs repeatedly or frame pacing deteriorates, restore `0`.
+
+## Experimental ARMv7 NEON texture conversion
+
+The Allwinner A33 has ARMv7 NEON/VFPv4, but our previous build explicitly
+selected `-mfpu=vfpv3-d16`. Quixjs 0.3.0 already contains an exact integer
+NEON implementation of WebGL `UNPACK_PREMULTIPLY_ALPHA_WEBGL` but gates it
+on `__aarch64__`. The small `quixjs-a30-neon.patch` also enables it when
+`__ARM_NEON` is defined. The build defaults to
+`-mcpu=cortex-a7 -mfpu=neon-vfpv4`.
+
+To A/B the SIMD optimization without changing the game settings:
+
+```sh
+A30_USE_NEON=0 bash build/build_quixjs_a30.sh   # scalar build
+# Copy runtime/quixjs.armhf to a separate named backup before the next build.
+A30_USE_NEON=1 bash build/build_quixjs_a30.sh   # NEON build
+```
+
+Compare identical movement/battle routes and inspect `log.txt` for slow
+frames. Both builds use the same WebGL semantics and 640x480 rendering;
+NEON accelerates the CPU-side alpha premultiplication on texture uploads,
+**not** the GPU shader or the JavaScript game logic. No real-device FPS
+improvement is claimed. The NEON intrinsic code cross-compiled to ARMv7
+assembly with clang; a complete glibc-2.23 build and hardware test remain
+pending. Always retain the previous working binary.
