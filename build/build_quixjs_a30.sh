@@ -21,10 +21,11 @@ cd "$SRC"
 
 # A30 patches: landscape->portrait presentation (QUIX_ROT) and the
 # glibc 2.23 roundeven fallback needed by JavaScriptCore.
-# Apply both the device support patch and the optional old-kernel memory
-# availability fallback. Applying twice is harmless; other conflicts fail.
+# The hooks-0.4 patch backports the newer partial-refresh and pure-event
+# algorithms; it inlines sameCode because quixjs 0.3.0 lacks that API.
+# Applying twice is harmless; other conflicts fail.
 for PATCH in "$BASE/patches/quixjs-a30.patch" "$BASE/patches/quixjs-a30-memavailable.patch" \
-             "$BASE/patches/quixjs-a30-neon.patch"; do
+             "$BASE/patches/quixjs-a30-neon.patch" "$BASE/patches/quixjs-a30-hooks-0.4.patch"; do
   if git apply --check "$PATCH" 2>/dev/null; then
     git apply "$PATCH"
   elif git apply --reverse --check "$PATCH" 2>/dev/null; then

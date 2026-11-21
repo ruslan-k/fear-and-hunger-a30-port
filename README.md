@@ -114,3 +114,22 @@ builds also change CPU tuning (`-mfpu=vfpv3-d16` vs `-mcpu=cortex-a7
 conclusion can be drawn. Keep it experimental and fixed-scene A/B plus a
 `low_memory_mb` comparison before claiming a gain. Always retain the previous
 working binary.
+
+## Backported RPG Maker hooks from quixjs 0.4.0 (experimental)
+
+`patches/quixjs-a30-hooks-0.4.patch` replaces the 0.3.0
+`refresh-on-net-change` and `pure-common-events` hooks with their 0.4.0
+algorithms (partial map refresh, richer pure-event detection). 0.4.0 calls
+`__quixEngine.sameCode`, which does not exist in 0.3.0; the patch inlines an
+equivalent helper in each hook, so no runtime C code or build rules change.
+The build script applies the patch automatically. `find-path-index` and
+`__quixEngine.lib()` are deliberately excluded: they need additional 0.4.0
+runtime support.
+
+Device baseline for the hooks A/B (2026-11-21, A30, Scene_Map map 74, 640x480,
+scalar binary, 30 s warmup + 150 s window): median FPS 26.4, JS/frame 35.0 ms,
+p95 frame time 90 ms (153 samples). The hooks arm was built (ARM EABI5, SHA-256
+`85b62ebb1cd2945652f212bb33444799964434192f2499fb22ecb262f6057c9c`) but the
+device went offline before the matched run; no effect is claimed. Check the
+log for `[refresh-on-net-change] partial refresh: on` before trusting the
+optimization on a new build.
