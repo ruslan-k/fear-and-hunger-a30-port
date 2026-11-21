@@ -60,3 +60,22 @@ The A30's physical buttons are keyboard events on `/dev/input/event3`; they are 
 The prebuilt runner is built from quixjs 0.3.0 with `build/build_quixjs_a30.sh`. Run it in an amd64 Debian/Ubuntu container with network access. It downloads the public A30 buildroot toolchain (glibc 2.23), builds JavaScriptCore/ICU/libc++ against that sysroot, applies `patches/quixjs-a30.patch`, and cross-compiles the runner with clang. The stock armhf cross toolchains link against a newer glibc and the resulting binary will not start on the A30.
 
 QuixJS is GPL-3.0; JavaScriptCore, ICU, tomlc17, stb_vorbis, nestegg and PixiJS keep their own licenses (see upstream `runtime/thirdparty` and the release licenses).
+
+## A30 low-memory guard (source-only change)
+
+The stock quixjs 0.3.0 `platform_mem_available_mb()` returns -1 on older A30
+kernels without `MemAvailable`. As a result, the `low_memory_mb` rescue in
+`runtime/core/main.c` never runs. The extra patch
+`patches/quixjs-a30-memavailable.patch` falls back to
+`MemFree + 0.5 * max(0, Cached + Buffers + SReclaimable - Shmem)`.
+It does **not** count SwapCached as free. When `MemAvailable` exists, its
+value is still preferred.
+
+The patch takes effect **only after rebuilding** with
+`build/build_quixjs_a30.sh` and deploying the new `runtime/quixjs.armhf`;
+the committed prebuilt binary is **unchanged**. The port config uses
+`low_memory_mb = 96`. Set it to `0` to A/B test the old behaviour. This
+guard targets memory-pressure stalls, not unconditional FPS uplift. Compare
+the same scene for at least three minutes: FPS and slow frames in `log.txt`,
+VmRSS/VmSwap in `/proc/<pid>/status`, and `pswpout` in `/proc/vmstat`.
+If full GC occurs repeatedly or frame pacing deteriorates, restore `0`.
