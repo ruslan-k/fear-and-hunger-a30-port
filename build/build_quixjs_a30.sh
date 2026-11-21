@@ -21,15 +21,18 @@ cd "$SRC"
 
 # A30 patches: landscape->portrait presentation (QUIX_ROT) and the
 # glibc 2.23 roundeven fallback needed by JavaScriptCore.
-PATCH="$BASE/patches/quixjs-a30.patch"
-if git apply --check "$PATCH" 2>/dev/null; then
-  git apply "$PATCH"
-elif git apply --reverse --check "$PATCH" 2>/dev/null; then
-  echo "A30 rotation patch already applied"
-else
-  echo "A30 rotation patch does not apply to this quixjs checkout" >&2
-  exit 1
-fi
+# Apply both the device support patch and the optional old-kernel memory
+# availability fallback. Applying twice is harmless; other conflicts fail.
+for PATCH in "$BASE/patches/quixjs-a30.patch" "$BASE/patches/quixjs-a30-memavailable.patch"; do
+  if git apply --check "$PATCH" 2>/dev/null; then
+    git apply "$PATCH"
+  elif git apply --reverse --check "$PATCH" 2>/dev/null; then
+    echo "Already applied: $(basename "$PATCH")"
+  else
+    echo "Patch does not apply: $PATCH" >&2
+    exit 1
+  fi
+done
 
 # The device buildroot toolchain (glibc 2.23); a stock armhf cross toolchain
 # links against a newer glibc and the binary will not load on the A30.
