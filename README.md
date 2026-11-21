@@ -102,5 +102,15 @@ frames. Both builds use the same WebGL semantics and 640x480 rendering;
 NEON accelerates the CPU-side alpha premultiplication on texture uploads,
 **not** the GPU shader or the JavaScript game logic. No real-device FPS
 improvement is claimed. The NEON intrinsic code cross-compiled to ARMv7
-assembly with clang; a complete glibc-2.23 build and hardware test remain
-pending. Always retain the previous working binary.
+assembly with clang; the resulting ARM EABI5 binary requires only GLIBC 2.17.
+
+Device A/B (2026-11-21, Miyoo A30, quixjs 0.3.0, stock `port.toml` with no
+`low_memory_mb`, 640x480, 60 s warmup + 120 s windows): median FPS 24.9
+(scalar) vs 24.5 (NEON), JS/frame 38.6 vs 39.0 ms, p95 frame time 115 vs
+107 ms. Lower RSS (about 280 MB vs 205-226 MB) and VmSwap (4.5 MB vs
+1.4 MB) were observed, but baseline memory conditions differed and the two
+builds also change CPU tuning (`-mfpu=vfpv3-d16` vs `-mcpu=cortex-a7
+-mfpu=neon-vfpv4`). So NEON is not a proven FPS win, and no SIMD-only
+conclusion can be drawn. Keep it experimental and fixed-scene A/B plus a
+`low_memory_mb` comparison before claiming a gain. Always retain the previous
+working binary.
