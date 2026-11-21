@@ -1,0 +1,46 @@
+diff --git a/runtime/platform/linux/platform.c b/runtime/platform/linux/platform.c
+--- a/runtime/platform/linux/platform.c
++++ b/runtime/platform/linux/platform.c
+@@ -43,17 +43,31 @@
+   malloc_trim(0);
+ }
+ 
+-long platform_mem_available_mb(void) {
+-  FILE *f = fopen("/proc/meminfo", "r");
+-  if (!f) return -1;
+-  char line[128];
+-  long kb = -1;
+-  while (fgets(line, sizeof line, f)) {
+-    if (sscanf(line, "MemAvailable: %ld kB", &kb) == 1) break;
+-  }
+-  fclose(f);
+-  return kb < 0 ? -1 : kb / 1024;
+-}
++long platform_mem_available_mb(void) {
++  FILE *f = fopen("/proc/meminfo", "r");
++  if (!f) return -1;
++  char line[128];
++  long available = -1, mem_free = -1;
++  long cached = 0, buffers = 0, reclaimable = 0, shmem = 0;
++  while (fgets(line, sizeof line, f)) {
++    if (sscanf(line, "MemAvailable: %ld kB", &available) == 1) continue;
++    if (sscanf(line, "MemFree: %ld kB", &mem_free) == 1) continue;
++    if (sscanf(line, "Cached: %ld kB", &cached) == 1) continue;
++    if (sscanf(line, "Buffers: %ld kB", &buffers) == 1) continue;
++    if (sscanf(line, "SReclaimable: %ld kB", &reclaimable) == 1) continue;
++    if (sscanf(line, "Shmem: %ld kB", &shmem) == 1) continue;
++  }
++  fclose(f);
++  if (available >= 0) return available / 1024;
++
++  // Older A30 kernels have no MemAvailable. Be conservative about how
++  // much cache can be reclaimed without stalling the game. SwapCached is
++  // resident memory, not free RAM, so it must NOT be added.
++  if (mem_free < 0) return -1;
++  long cache = cached + buffers + reclaimable - shmem;
++  if (cache < 0) cache = 0;
++  return (mem_free + cache / 2) / 1024;
++}
+ 
+ int platform_malloc_stats(PlatformMallocStats *out) {
+   // mallinfo: la de glibc 2.28 (la de las portatiles); mallinfo2 es posterior

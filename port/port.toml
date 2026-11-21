@@ -26,6 +26,10 @@ fps     = 30
 # RAM (tirones de mas de 1 s y al final bloqueada). Con los hooks que quitan
 # la basura (events-cached, interpreter-fast...) 128 ya no da tirones.
 js_memory = 96
+# A30's older /proc/meminfo has no MemAvailable. The companion source
+# patch estimates reclaimable RAM and makes quixjs's existing low-memory
+# image-release / GC guard functional. Disable with 0 for A/B comparisons.
+low_memory_mb = 96
 
 # En el PC (el binario que no es el de PortMaster): 60 imagenes por segundo,
 # alli sobra potencia. [engine.handheld] haria lo mismo para las portatiles.

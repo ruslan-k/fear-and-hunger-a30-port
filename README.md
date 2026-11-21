@@ -60,3 +60,57 @@ The A30's physical buttons are keyboard events on `/dev/input/event3`; they are 
 The prebuilt runner is built from quixjs 0.3.0 with `build/build_quixjs_a30.sh`. Run it in an amd64 Debian/Ubuntu container with network access. It downloads the public A30 buildroot toolchain (glibc 2.23), builds JavaScriptCore/ICU/libc++ against that sysroot, applies `patches/quixjs-a30.patch`, and cross-compiles the runner with clang. The stock armhf cross toolchains link against a newer glibc and the resulting binary will not start on the A30.
 
 QuixJS is GPL-3.0; JavaScriptCore, ICU, tomlc17, stb_vorbis, nestegg and PixiJS keep their own licenses (see upstream `runtime/thirdparty` and the release licenses).
+
+## A30 low-memory guard (source-only change)
+
+The stock quixjs 0.3.0 `platform_mem_available_mb()` returns -1 on older A30
+kernels without `MemAvailable`. As a result, the `low_memory_mb` rescue in
+`runtime/core/main.c` never runs. The extra patch
+`patches/quixjs-a30-memavailable.patch` falls back to
+`MemFree + 0.5 * max(0, Cached + Buffers + SReclaimable - Shmem)`.
+It does **not** count SwapCached as free. When `MemAvailable` exists, its
+value is still preferred.
+
+The patch takes effect **only after rebuilding** with
+`build/build_quixjs_a30.sh` and deploying the new `runtime/quixjs.armhf`;
+the committed prebuilt binary is **unchanged**. The port config uses
+`low_memory_mb = 96`. Set it to `0` to A/B test the old behaviour. This
+guard targets memory-pressure stalls, not unconditional FPS uplift. Compare
+the same scene for at least three minutes: FPS and slow frames in `log.txt`,
+VmRSS/VmSwap in `/proc/<pid>/status`, and `pswpout` in `/proc/vmstat`.
+If full GC occurs repeatedly or frame pacing deteriorates, restore `0`.
+
+## Experimental ARMv7 NEON texture conversion
+
+The Allwinner A33 has ARMv7 NEON/VFPv4, but our previous build explicitly
+selected `-mfpu=vfpv3-d16`. Quixjs 0.3.0 already contains an exact integer
+NEON implementation of WebGL `UNPACK_PREMULTIPLY_ALPHA_WEBGL` but gates it
+on `__aarch64__`. The small `quixjs-a30-neon.patch` also enables it when
+`__ARM_NEON` is defined. The build defaults to
+`-mcpu=cortex-a7 -mfpu=neon-vfpv4`.
+
+To A/B the SIMD optimization without changing the game settings:
+
+```sh
+A30_USE_NEON=0 bash build/build_quixjs_a30.sh   # scalar build
+# Copy runtime/quixjs.armhf to a separate named backup before the next build.
+A30_USE_NEON=1 bash build/build_quixjs_a30.sh   # NEON build
+```
+
+Compare identical movement/battle routes and inspect `log.txt` for slow
+frames. Both builds use the same WebGL semantics and 640x480 rendering;
+NEON accelerates the CPU-side alpha premultiplication on texture uploads,
+**not** the GPU shader or the JavaScript game logic. No real-device FPS
+improvement is claimed. The NEON intrinsic code cross-compiled to ARMv7
+assembly with clang; the resulting ARM EABI5 binary requires only GLIBC 2.17.
+
+Device A/B (2026-11-21, Miyoo A30, quixjs 0.3.0, stock `port.toml` with no
+`low_memory_mb`, 640x480, 60 s warmup + 120 s windows): median FPS 24.9
+(scalar) vs 24.5 (NEON), JS/frame 38.6 vs 39.0 ms, p95 frame time 115 vs
+107 ms. Lower RSS (about 280 MB vs 205-226 MB) and VmSwap (4.5 MB vs
+1.4 MB) were observed, but baseline memory conditions differed and the two
+builds also change CPU tuning (`-mfpu=vfpv3-d16` vs `-mcpu=cortex-a7
+-mfpu=neon-vfpv4`). So NEON is not a proven FPS win, and no SIMD-only
+conclusion can be drawn. Keep it experimental and fixed-scene A/B plus a
+`low_memory_mb` comparison before claiming a gain. Always retain the previous
+working binary.
